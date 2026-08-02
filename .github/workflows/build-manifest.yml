@@ -1,0 +1,61 @@
+name: Build item manifest
+
+# Regenerate manifest.json whenever item PNGs change, so the app can list the
+# library by reading ONE small file over the CDN (raw) instead of the GitHub
+# API — which is capped at 60 requests/hour for anonymous users. This lets any
+# number of people use the app without hitting that quota.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'MTH/**'
+      - 'PCTH/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-manifest
+  cancel-in-progress: true
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate manifest.json
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, datetime
+          tracked = subprocess.check_output(
+              ['git', 'ls-files', 'MTH/*', 'PCTH/*']).decode('utf-8').splitlines()
+          def pick(prefix):
+              return sorted((p for p in tracked
+                             if p.startswith(prefix) and p.lower().endswith('.png')),
+                            key=str.lower)
+          data = {
+              'generated': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'MTH': pick('MTH/'),
+              'PCTH': pick('PCTH/'),
+          }
+          with open('manifest.json', 'w', encoding='utf-8') as f:
+              json.dump(data, f, ensure_ascii=False)
+          print('MTH', len(data['MTH']), 'PCTH', len(data['PCTH']))
+          PY
+
+      - name: Commit if changed
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          if git diff --cached --quiet; then
+            echo "manifest.json unchanged"
+          else
+            git commit -m "Update manifest.json [skip ci]"
+            git push
+          fi
